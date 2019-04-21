@@ -226,66 +226,84 @@ int main() {
           // j[1] is the data JSON object
 
         	// Main car's localization Data
-          	double car_x = j[1]["x"];
-          	double car_y = j[1]["y"];
-          	double car_s = j[1]["s"];
-          	double car_d = j[1]["d"];
-          	double car_yaw = j[1]["yaw"];
-          	double car_speed = j[1]["speed"];
+          	double ego_car_x = j[1]["x"];
+          	double ego_car_y = j[1]["y"];
+          	double ego_car_s = j[1]["s"];
+          	double ego_car_d = j[1]["d"];
+          	double ego_car_yaw = j[1]["yaw"];
+          	double ego_car_speed = j[1]["speed"];
 
           	// Previous path data given to the Planner
-          	auto previous_path_x = j[1]["previous_path_x"];
-          	auto previous_path_y = j[1]["previous_path_y"];
+          	nlohmann::json previous_path_x = j[1]["previous_path_x"];
+          	nlohmann::json previous_path_y = j[1]["previous_path_y"];
           	// Previous path's end s and d values
           	double end_path_s = j[1]["end_path_s"];
           	double end_path_d = j[1]["end_path_d"];
 
           	// Sensor Fusion Data, a list of all other cars on the same side of the road.
-          	auto sensor_fusion = j[1]["sensor_fusion"];
+          	nlohmann::json sensor_fusion = j[1]["sensor_fusion"];
 
             // Provided previous path point size.
             int prev_size = previous_path_x.size();
 
             // Preventing collitions.
-            if (prev_size > 0) {
-              car_s = end_path_s;
+            if (prev_size > 0)
+            {
+              ego_car_s = end_path_s;
             }
 
             // Prediction : Analysing other cars positions.
-            bool car_ahead = false;
-            bool car_left = false;
-            bool car_righ = false;
+            bool player_car_ahead = false;
+            bool player_car_left = false;
+            bool player_car_righ = false;
+
             for ( int i = 0; i < sensor_fusion.size(); i++ ) {
                 float d = sensor_fusion[i][6];
-                int car_lane = -1;
+
+                //////////////////////////////////////////
+                //Use d in Fernet coornidate to determine the lane that the vehicle is in
+                int player_car_lane = -1;
                 // is it on the same lane we are
-                if ( d > 0 && d < 4 ) {
-                  car_lane = 0;
-                } else if ( d > 4 && d < 8 ) {
-                  car_lane = 1;
-                } else if ( d > 8 && d < 12 ) {
-                  car_lane = 2;
+                if ( d > 0 && d < 4 )
+                {
+                  player_car_lane = 0;
+                } 
+                else if ( d > 4 && d < 8 ) 
+                {
+                  player_car_lane = 1;
+                } 
+                else if ( d > 8 && d < 12 ) 
+                {
+                  player_car_lane = 2;
                 }
-                if (car_lane < 0) {
+
+                if (player_car_lane < 0) {
                   continue;
                 }
+
                 // Find car speed.
                 double vx = sensor_fusion[i][3];
                 double vy = sensor_fusion[i][4];
                 double check_speed = sqrt(vx*vx + vy*vy);
                 double check_car_s = sensor_fusion[i][5];
+
                 // Estimate car s position after executing previous trajectory.
                 check_car_s += ((double)prev_size*0.02*check_speed);
 
-                if ( car_lane == lane ) {
+                if ( player_car_lane == lane )
+                {
                   // Car in our lane.
-                  car_ahead |= check_car_s > car_s && check_car_s - car_s < 30;
-                } else if ( car_lane - lane == -1 ) {
+                  player_car_ahead |= check_car_s > ego_car_s && check_car_s - ego_car_s < 30;
+                } 
+                else if ( player_car_lane - lane == -1 )
+                {
                   // Car left
-                  car_left |= car_s - 30 < check_car_s && car_s + 30 > check_car_s;
-                } else if ( car_lane - lane == 1 ) {
+                  player_car_left |= ego_car_s - 30 < check_car_s && ego_car_s + 30 > check_car_s;
+                } 
+                else if ( player_car_lane - lane == 1 )
+                {
                   // Car right
-                  car_righ |= car_s - 30 < check_car_s && car_s + 30 > check_car_s;
+                  player_car_righ |= ego_car_s - 30 < check_car_s && ego_car_s + 30 > check_car_s;
                 }
             }
 
@@ -293,11 +311,11 @@ int main() {
             double speed_diff = 0;
             const double MAX_SPEED = 49.5;
             const double MAX_ACC = .224;
-            if ( car_ahead ) { // Car ahead
-              if ( !car_left && lane > 0 ) {
+            if ( player_car_ahead ) { // Car ahead
+              if ( !player_car_left && lane > 0 ) {
                 // if there is no car left and there is a left lane.
                 lane--; // Change lane left.
-              } else if ( !car_righ && lane != 2 ){
+              } else if ( !player_car_righ && lane != 2 ){
                 // if there is no car right and there is a right lane.
                 lane++; // Change lane right.
               } else {
@@ -305,7 +323,7 @@ int main() {
               }
             } else {
               if ( lane != 1 ) { // if we are not on the center lane.
-                if ( ( lane == 0 && !car_righ ) || ( lane == 2 && !car_left ) ) {
+                if ( ( lane == 0 && !player_car_righ ) || ( lane == 2 && !player_car_left ) ) {
                   lane = 1; // Back to center.
                 }
               }
@@ -317,21 +335,21 @@ int main() {
           	vector<double> ptsx;
             vector<double> ptsy;
 
-            double ref_x = car_x;
-            double ref_y = car_y;
-            double ref_yaw = deg2rad(car_yaw);
+            double ref_x = ego_car_x;
+            double ref_y = ego_car_y;
+            double ref_yaw = deg2rad(ego_car_yaw);
 
             // Do I have have previous points
             if ( prev_size < 2 ) {
                 // There are not too many...
-                double prev_car_x = car_x - cos(car_yaw);
-                double prev_car_y = car_y - sin(car_yaw);
+                double prev_car_x = ego_car_x - cos(ego_car_yaw);
+                double prev_car_y = ego_car_y - sin(ego_car_yaw);
 
                 ptsx.push_back(prev_car_x);
-                ptsx.push_back(car_x);
+                ptsx.push_back(ego_car_x);
 
                 ptsy.push_back(prev_car_y);
-                ptsy.push_back(car_y);
+                ptsy.push_back(ego_car_y);
             } else {
                 // Use the last two points.
                 ref_x = previous_path_x[prev_size - 1];
@@ -349,9 +367,9 @@ int main() {
             }
 
             // Setting up target points in the future.
-            vector<double> next_wp0 = getXY(car_s + 30, 2 + 4*lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-            vector<double> next_wp1 = getXY(car_s + 60, 2 + 4*lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-            vector<double> next_wp2 = getXY(car_s + 90, 2 + 4*lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            vector<double> next_wp0 = getXY(ego_car_s + 30, 2 + 4*lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            vector<double> next_wp1 = getXY(ego_car_s + 60, 2 + 4*lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            vector<double> next_wp2 = getXY(ego_car_s + 90, 2 + 4*lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
 
             ptsx.push_back(next_wp0[0]);
             ptsx.push_back(next_wp1[0]);
