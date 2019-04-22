@@ -198,12 +198,12 @@ int main() {
   }
 
   // Car's lane. Starting at middle lane.
-  int lane = 1;
+  int ego_car_lane = 1;
 
   // Reference velocity.
   double ref_vel = 0.0; // mph
 
-  h.onMessage([&ref_vel, &lane, &map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy]
+  h.onMessage([&ref_vel, &ego_car_lane, &map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy]
     (uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length, uWS::OpCode opCode) {
 
 
@@ -255,9 +255,12 @@ int main() {
             // Prediction : Analysing other cars positions.
             bool player_car_ahead = false;
             bool player_car_left = false;
-            bool player_car_righ = false;
+            bool player_car_right = false;
 
-            for ( int i = 0; i < sensor_fusion.size(); i++ ) {
+            const double lane_change_distance_threshold = 30;
+
+            for ( int i = 0; i < sensor_fusion.size(); i++ )
+            {
                 float d = sensor_fusion[i][6];
 
                 //////////////////////////////////////////
@@ -282,52 +285,63 @@ int main() {
                 }
 
                 // Find car speed.
-                double vx = sensor_fusion[i][3];
-                double vy = sensor_fusion[i][4];
-                double check_speed = sqrt(vx*vx + vy*vy);
-                double check_car_s = sensor_fusion[i][5];
+                double player_vx = sensor_fusion[i][3];
+                double player_vy = sensor_fusion[i][4];
+                double check_player_car_speed = sqrt(player_vx*player_vx + player_vy*player_vy);
+                double check_player_car_s = sensor_fusion[i][5];
 
                 // Estimate car s position after executing previous trajectory.
-                check_car_s += ((double)prev_size*0.02*check_speed);
+                check_player_car_s += ((double)prev_size*0.02*check_player_car_speed);
 
-                if ( player_car_lane == lane )
+                if ( player_car_lane == ego_car_lane )
                 {
                   // Car in our lane.
-                  player_car_ahead |= check_car_s > ego_car_s && check_car_s - ego_car_s < 30;
+                  player_car_ahead |= check_player_car_s > ego_car_s && check_player_car_s - ego_car_s < lane_change_distance_threshold;
                 } 
-                else if ( player_car_lane - lane == -1 )
+                else if ( player_car_lane - ego_car_lane == -1 )
                 {
-                  // Car left
-                  player_car_left |= ego_car_s - 30 < check_car_s && ego_car_s + 30 > check_car_s;
+                  // Car left far away
+                  player_car_left |= ego_car_s - lane_change_distance_threshold < check_player_car_s && ego_car_s + lane_change_distance_threshold > check_player_car_s;
                 } 
-                else if ( player_car_lane - lane == 1 )
+                else if ( player_car_lane - ego_car_lane == 1 )
                 {
-                  // Car right
-                  player_car_righ |= ego_car_s - 30 < check_car_s && ego_car_s + 30 > check_car_s;
+                  // Car right  far away
+                  player_car_right |= ego_car_s - lane_change_distance_threshold < check_player_car_s && ego_car_s + lane_change_distance_threshold > check_player_car_s;
                 }
             }
 
             // Behavior : Let's see what to do.
             double speed_diff = 0;
-            const double MAX_SPEED = 49.5;
+            const double MAX_SPEED = 49.5;//MPH
             const double MAX_ACC = .224;
-            if ( player_car_ahead ) { // Car ahead
-              if ( !player_car_left && lane > 0 ) {
+            if ( player_car_ahead )
+            { // Car ahead
+              if ( !player_car_left && ego_car_lane > 0 ) 
+              {
                 // if there is no car left and there is a left lane.
-                lane--; // Change lane left.
-              } else if ( !player_car_righ && lane != 2 ){
-                // if there is no car right and there is a right lane.
-                lane++; // Change lane right.
-              } else {
-                speed_diff -= MAX_ACC;
+                ego_car_lane--; // Change lane left.
               }
-            } else {
-              if ( lane != 1 ) { // if we are not on the center lane.
-                if ( ( lane == 0 && !player_car_righ ) || ( lane == 2 && !player_car_left ) ) {
-                  lane = 1; // Back to center.
+              else if ( !player_car_right && ego_car_lane != 2 )
+              {
+                // if there is no car right and there is a right lane.
+                ego_car_lane++; // Change lane right.
+              }
+              else
+              {
+                speed_diff -= MAX_ACC; //TODO: maximum deceleration is not needed, only need to keep the distance
+              }
+            } 
+            else//No car is ahead of us
+            {
+              if ( ego_car_lane != 1 ) 
+              { // if we are not on the center lane.
+                if ( ( ego_car_lane == 0 && !player_car_right ) || ( ego_car_lane == 2 && !player_car_left ) ) 
+                {
+                  ego_car_lane = 1; // Back to center.
                 }
               }
-              if ( ref_vel < MAX_SPEED ) {
+              if ( ref_vel < MAX_SPEED )
+              {
                 speed_diff += MAX_ACC;
               }
             }
@@ -340,17 +354,21 @@ int main() {
             double ref_yaw = deg2rad(ego_car_yaw);
 
             // Do I have have previous points
-            if ( prev_size < 2 ) {
+            double a_small_number = 0.001;
+            if ( prev_size < 2 ) 
+            {
                 // There are not too many...
-                double prev_car_x = ego_car_x - cos(ego_car_yaw);
-                double prev_car_y = ego_car_y - sin(ego_car_yaw);
+                double prev_ego_car_x = ego_car_x - cos(ego_car_yaw)*(ego_car_speed+a_small_number)*0.02;
+                double prev_ego_car_y = ego_car_y - sin(ego_car_yaw)*(ego_car_speed+a_small_number)*0.02;
 
-                ptsx.push_back(prev_car_x);
+                ptsx.push_back(prev_ego_car_x);
                 ptsx.push_back(ego_car_x);
 
-                ptsy.push_back(prev_car_y);
+                ptsy.push_back(prev_ego_car_y);
                 ptsy.push_back(ego_car_y);
-            } else {
+            } 
+            else
+            {
                 // Use the last two points.
                 ref_x = previous_path_x[prev_size - 1];
                 ref_y = previous_path_y[prev_size - 1];
@@ -367,9 +385,10 @@ int main() {
             }
 
             // Setting up target points in the future.
-            vector<double> next_wp0 = getXY(ego_car_s + 30, 2 + 4*lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-            vector<double> next_wp1 = getXY(ego_car_s + 60, 2 + 4*lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-            vector<double> next_wp2 = getXY(ego_car_s + 90, 2 + 4*lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            double target_point_spacing = 30;
+            vector<double> next_wp0 = getXY(ego_car_s + target_point_spacing*1, 2 + 4*ego_car_lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            vector<double> next_wp1 = getXY(ego_car_s + target_point_spacing*2, 2 + 4*ego_car_lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            vector<double> next_wp2 = getXY(ego_car_s + target_point_spacing*3, 2 + 4*ego_car_lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
 
             ptsx.push_back(next_wp0[0]);
             ptsx.push_back(next_wp1[0]);
@@ -380,7 +399,8 @@ int main() {
             ptsy.push_back(next_wp2[1]);
 
             // Making coordinates to local car coordinates.
-            for ( int i = 0; i < ptsx.size(); i++ ) {
+            for ( int i = 0; i < ptsx.size(); i++ ) 
+            {
               double shift_x = ptsx[i] - ref_x;
               double shift_y = ptsy[i] - ref_y;
 
@@ -389,37 +409,46 @@ int main() {
             }
 
             // Create the spline.
-            tk::spline s;
-            s.set_points(ptsx, ptsy);
+            tk::spline spline_curve;
+            spline_curve.set_points(ptsx, ptsy);
 
             // Output path points from previous path for continuity.
           	vector<double> next_x_vals;
           	vector<double> next_y_vals;
-            for ( int i = 0; i < prev_size; i++ ) {
+            for ( int i = 0; i < prev_size; i++ )
+            {
               next_x_vals.push_back(previous_path_x[i]);
               next_y_vals.push_back(previous_path_y[i]);
             }
 
             // Calculate distance y position on 30 m ahead.
             double target_x = 30.0;
-            double target_y = s(target_x);
+            double target_y = spline_curve(target_x);
             double target_dist = sqrt(target_x*target_x + target_y*target_y);
 
             double x_add_on = 0;
-
-            for( int i = 1; i < 50 - prev_size; i++ ) {
+            //Generate 50 points total
+            for( int i = 1; i < 50 - prev_size; i++ )
+            {
               ref_vel += speed_diff;
-              if ( ref_vel > MAX_SPEED ) {
+
+              if ( ref_vel > MAX_SPEED )
+              {
                 ref_vel = MAX_SPEED;
-              } else if ( ref_vel < MAX_ACC ) {
+              } 
+              else if ( ref_vel < MAX_ACC ) 
+              {
                 ref_vel = MAX_ACC;
               }
-              double N = target_dist/(0.02*ref_vel/2.24);
+
+              double mph_to_mps = 2.23693629;
+              double N = target_dist/(0.02*ref_vel/mph_to_mps);
               double x_point = x_add_on + target_x/N;
-              double y_point = s(x_point);
+              double y_point = spline_curve(x_point);
 
               x_add_on = x_point;
 
+              //Transform to global coordinate
               double x_ref = x_point;
               double y_ref = y_point;
 
